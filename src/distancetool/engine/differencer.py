@@ -33,6 +33,7 @@ from typing import Dict, List, Optional, Tuple
 from ..ir.types import IRType, IntType, FloatType, BoolType
 from ..ir.terms import FuncDef
 from .z3_encoder import Z3Encoder, EncoderError
+from .simplifier import simplify_and_pretty
 
 
 MAX_EXAMPLES = 5
@@ -177,11 +178,12 @@ def _run_diff(func_old: FuncDef, func_new: FuncDef, timeout_ms: int) -> DiffResu
 
     # ── Step 2: compute symbolic distance expression ─────────────────────────
     dist_expr = _distance_expr(out_old, out_new, return_type)
-    sym_dist_str = _simplify_str(dist_expr)
+    tactic_ms = min(timeout_ms // 4, 2_000)
+    sym_dist_str = simplify_and_pretty(dist_expr, tactic_timeout_ms=tactic_ms)
 
     # ── Step 3: characterise the diff condition ──────────────────────────────
     diff_cond = out_old != out_new
-    diff_cond_str = _simplify_str(diff_cond)
+    diff_cond_str = simplify_and_pretty(diff_cond, tactic_timeout_ms=tactic_ms)
 
     # ── Step 4: collect counterexamples ─────────────────────────────────────
     counterexamples: List[Example] = []
@@ -277,8 +279,3 @@ def _z3_to_python(val: z3.ExprRef) -> object:
     return str(val)
 
 
-def _simplify_str(expr: z3.ExprRef) -> str:
-    try:
-        return str(z3.simplify(expr))
-    except Exception:  # noqa: BLE001
-        return str(expr)
