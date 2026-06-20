@@ -1,188 +1,247 @@
-# A Language Built on Differential Logical Relations & Program Metrics — Project Primer
+# Program Distance for Software Engineering & LLM Code-Gen Guidance — Project Primer
+
+*(Supersedes the earlier DP-and-incremental-computing draft. See "Why not differential
+privacy" below for the reasoning.)*
 
 ## Motivation
 
-Two practical problems in industrial programming both reduce, at their core, to the same
-question: *if the input to a program changes by some amount, how much does the output
-change?*
+Tools that need to know "how much did this code's behavior actually change" currently
+measure something else entirely: syntactic tree-edit distance, n-gram overlap (CodeBLEU),
+or embedding cosine similarity. These are proxies for semantic distance, not the thing
+itself, and the gap shows up concretely: a 2026 study of LLM-based test generation under
+code evolution found that under semantics-preserving edits, generated tests degrade sharply
+and the models show "sensitivity to lexical changes rather than true semantic impact" —
+current tooling cannot reliably tell "this refactor changed nothing observable" from "this
+refactor silently broke a corner case."
 
-- **Differential privacy / sensitive data analytics**: you need a provable upper bound on
-  how much a query's output can change when one record in the input is added, removed, or
-  modified. Get this wrong and your privacy guarantee is fiction.
-- **Incremental / reactive computation**: build systems, materialized views, streaming
-  aggregates, reactive UIs — all need to take a small change to the input and produce the
-  corresponding change to the output *without rerunning the whole computation*, and get it
-  exactly right, not approximately right.
+There is an existing, fairly mature field that *does* reason about real program semantics
+for exactly this purpose — regression verification and semantic differencing, via symbolic
+execution and abstract interpretation (SymDiff, differential symbolic execution, abstract
+semantic differencing). But it has a structural ceiling: it mostly answers a boolean
+question (equivalent / not-equivalent), and where it can't decide, it says "unknown" and
+stops. A recent tool in this line (PASDA) explicitly names this as the open problem —
+existing approaches that can't prove equivalence or non-equivalence "provide no information
+regarding the programs' non-/equivalence."
 
-Existing tools solve these separately, with type systems that are weaker than they need to
-be. The goal of this project is a single language, grounded in Ugo Dal Lago's research
-program on differential logical relations and program metrics, where "how output-change
-depends on input-change" is a first-class part of the type system — precise enough to
-serve as the foundation for *both* problems, and in fact to unify them into something
-neither existing line of work does on its own: incrementally-updated, privacy-budget-aware
-streaming analytics.
+This is precisely the upgrade differential logical relations (DLR) were built to make to
+ordinary logical relations: instead of a boolean (related / not related), a structured,
+type-respecting *quantity* — and for function types, that quantity is itself a function
+relating input-difference to output-difference, not a collapsed worst-case number. Applied
+here: instead of "equivalent / not-equivalent / unknown," you get "identical except when the
+input satisfies condition X, in which case the output differs by at most Y" — a genuinely
+more useful answer for code review risk-scoping, regression test selection, and gating
+LLM-generated patches against a reference behavior.
+
+Incremental computation rides along as a secondary application of the same machinery: Dal
+Lago & Gavazzo's "Part II" result is that a program's *derivative* — an exact (not just
+bounded) version of this same distance-relating object — is the right semantic foundation
+for incremental re-execution. So the same core, when it can compute an exact rather than
+merely bounded relation, can also drive cheap incremental re-runs of dataflow/pipeline-style
+code after a small edit. This is not the product's main pitch — it's a capability that falls
+out for free when the underlying program happens to be amenable to it.
 
 ## Literature Review
 
 ### Core theory: Differential Logical Relations & Program Metrics (Dal Lago et al.)
 
 - **Dal Lago, Gavazzo, Yoshimizu — "Differential Logical Relations, Part I: The
-  Simply-Typed Case"** (ICALP 2019; long version arXiv:1904.12137). Introduces DLR: instead
-  of measuring the distance between two programs with a single number, measure it with an
-  object that reflects the *type* (interactive complexity) of the programs being compared.
-  At function type, the "distance" between two functions is itself a function — relating
-  errors in input to errors in output — not a flattened scalar bound. Shows ordinary
-  logical relations (boolean equivalence) and classic numeric program metrics are both
-  special cases of this more general notion. Organizes DLR in a cartesian closed category
-  (notably, plain metric relations don't have this structure — only monoidal closed).
-
+  Simply-Typed Case"** (ICALP 2019; arXiv:1904.12137). The foundational move: measure
+  program distance with a type-respecting object, not a number. At function type, the
+  distance between two functions is itself a function relating input-difference to
+  output-difference. Ordinary logical relations (boolean equivalence) and classic numeric
+  program metrics are both special cases.
 - **Dal Lago, Gavazzo — "Differential Logical Relations, Part II: Increments and
-  Derivatives"** (TCS 2021). The practically critical follow-up: a program's "derivative" is
-  its canonical self-distance, and this gives a semantic foundation for incremental
-  computation — connects differential program semantics directly to incremental computing.
-
+  Derivatives"** (TCS 2021). A program's derivative is its canonical self-distance —
+  the semantic link to incremental computation (the secondary application here).
+- **Dal Lago, Gavazzo — "Effectful Program Distancing"** (POPL 2022). Extends program
+  distancing to *effectful* programs — directly relevant, since almost no real code is
+  pure; this is the theoretical backbone for handling I/O, exceptions, and mutation in the
+  core IR rather than restricting to a toy pure subset.
 - **Dal Lago, Hoshino, Pistone — "On the Lattice of Program Metrics"** (FSCD 2023,
-  arXiv:2302.05022). Studies how the various notions of program metric relate: metrics from
-  interpretation in metric spaces, observational/context-distance metrics, equational
-  metrics, and a new "interactive metric" built via the Int-construction. Establishes when
-  one refines another — the metric analogue of the classical lattice of program
-  equivalences.
-
+  arXiv:2302.05022). How the various notions of program metric (denotational,
+  observational/context-distance, equational, interactive) refine one another — useful as
+  a map of which notion of "distance" is appropriate for which guarantee we want to give
+  downstream (e.g., a sound static bound vs. an exact dynamic derivative).
 - **Dal Lago, Hoshino, Pistone — "On the Metric Nature of (Differential) Logical
-  Relations"** (FSCD 2025). Clarifies exactly what kind of metric space DLR distances form:
-  not a standard (quasi-)metric, but a new structure they call *quasi-quasi-metrics*.
-  Useful as a guide for what compositional reasoning principles are actually sound.
+  Relations"** (FSCD 2025). What kind of metric space DLR distances actually form
+  (quasi-quasi-metrics) — informs which compositional reasoning principles (e.g., triangle
+  inequality across a chain of patches) are actually sound to rely on.
+- **Crubillé, Dal Lago — "Metric Reasoning About λ-Terms"** (affine: LICS 2015; general:
+  ESOP 2017). Context-distance for probabilistic λ-calculi; groundwork for the
+  observational notion of metric.
 
-- **Crubillé, Dal Lago — "Metric Reasoning About λ-Terms"** (affine case, LICS 2015;
-  general case, ESOP 2017). Earlier groundwork: context-distance (the metric analogue of
-  Morris-style context equivalence) for probabilistic λ-calculi.
+### Adjacent, already-mature field: regression verification & semantic differencing
 
-- **Dal Lago, Gavazzo — "A Relational Theory of Effects and Coeffects"** (POPL 2022). The
-  unifying layer: graded modal types `□ₛA` where grades `s` come from a semiring-like
-  resource algebra, generalizing sensitivity (Reed & Pierce), resource consumption (Orchard
-  et al.), and security/information-flow levels as instances of one grading discipline.
-  This is the natural type-system scaffold for embedding DLR-style distances.
+- **Jackson, Ladd — "Semantic Diff: A Tool for Summarizing the Effects of
+  Modifications"** (ICSM 1994). The original framing of the problem this project targets.
+- **Lahiri, Hawblitzel, Kawaguchi, Rebêlo — SymDiff** (CAV 2012). Language-agnostic
+  semantic diff tool for imperative programs, built on the Boogie intermediate verification
+  language, with C/C#/x86 frontends — the precedent for a language-agnostic IR + frontend
+  architecture.
+- **Person, Dwyer, Elbaum, Păsăreanu — "Differential Symbolic Execution"** (FSE 2008) and
+  **Person, Yang, Rungta, Khurshid — "Directed Incremental Symbolic Execution"** (PLDI
+  2011). Symbolic-execution-based approaches to characterizing behavioral differences
+  between two program versions.
+- **Partush, Yahav — "Abstract Semantic Differencing for Numerical Programs"** (SAS 2013)
+  and **"... via Speculative Correlation"** (PLDI 2014). Abstract-interpretation-based
+  differencing that characterizes *both* changed and unchanged behavior, rather than just
+  a single counterexample — closer in spirit to what this project wants, though still
+  boolean/region-based rather than quantitative.
+- **Godlin, Strichman — "Regression Verification"** (DAC 2009). Establishes the
+  problem area: checking behavioral equivalence across versions of an evolving program, as
+  distinct from translation validation (where the two programs are at different abstraction
+  levels, e.g. source vs. compiled).
+- **A 2025 partition-based tool (PASDA)** reports that this field's existing approaches,
+  when they cannot prove equivalence or non-equivalence, return "unknown" with no further
+  information — the gap this project is aimed at closing with a quantitative, structured
+  answer instead.
 
-### The Fuzz family — sensitivity types for differential privacy (the existing industrial-adjacent precedent)
+### LLM code-gen — current (weak) proxies for code similarity, and the documented gap
 
-- **Reed, Pierce — Fuzz** (ICFP 2010). First use of linear types for sensitivity: function
-  type `A ⊸ₛ B` carries a Lipschitz bound `s`, with soundness theorem
-  `d(f x, f y) ≤ s · d(x, y)`. Combined with a probability monad for DP noise mechanisms.
-- **Gaboardi et al. — DFuzz** ("Linear Dependent Types for Differential Privacy," POPL
-  2013). Extends Fuzz with lightweight dependent types so sensitivity bounds can depend on
-  runtime values, not just be static constants.
-- **Near et al. — Duet** (2019). Two mutually-defined languages (one for sensitivity, one
-  for privacy), supporting more advanced DP variants (approximate / (ε,δ)-DP) and richer
-  higher-order programming.
-- **Toro et al. — Jazz**, and others (Fuzzi, Solo, Contextual Linear Types for DP). All
-  documented limitation: each product/sum type forces an *approximation* in the sensitivity
-  analysis, because the type system only carries a single worst-case (global) scalar bound.
-  None of these have an incremental-computation story.
+- **TSED (Tree Similarity of Edit Distance)**, used e.g. in recent prompt-sensitivity
+  studies of code LLMs: an openly-available syntax-tree edit-distance metric, explicitly
+  *not* claiming semantic equivalence.
+- **CodeBLEU**, used in ensemble/voting approaches to LLM code generation (e.g. EnsLLM):
+  n-gram-style lexical overlap adapted for code, combined in practice with an
+  execution-based differential analysis (via the property-based testing tool CrossHair) as
+  a complementary, sampling-based behavioral check — i.e., practitioners already reach for
+  differential testing because the static syntactic metric isn't enough, but rely on
+  sampled counterexamples rather than a compositional, typed guarantee.
+- **"Evaluating LLM-Based Test Generation Under Software Evolution"** (2026,
+  arXiv:2603.23443) — direct evidence of the problem: under semantics-preserving edits, LLM-
+  generated regression tests degrade sharply, with the paper concluding current test
+  generation "relies heavily on surface-level cues" rather than tracking real behavioral
+  impact.
 
-### Incremental computation — change structures and derivatives (the engineering precedent for "Part II")
+### Incremental computation (secondary application — same derivative machinery, applied to execution rather than analysis)
 
-- **Cai, Giarrusso, Rendel, Ostermann — "A Theory of Changes for Higher-Order Languages:
-  Incrementalizing λ-Calculi by Static Differentiation"** (PLDI 2014). Defines *change
-  structures*: for each type, a set of changes with operations `⊕` (apply a change) and `⊖`
-  (compute the change between two values). Gives a fully static, automatic program
-  transformation from a function to its derivative — a function from input-changes to
-  output-changes — with a machine-checked (Agda) correctness proof.
+- **Cai, Giarrusso, Rendel, Ostermann — "A Theory of Changes for Higher-Order
+  Languages"** (PLDI 2014). Change structures (`⊕`/`⊖`) and a static program-to-derivative
+  transformation with a machine-checked correctness proof.
 - **Giarrusso et al. — "Incremental λ-Calculus in Cache-Transfer Style"** (ESOP 2019).
-  Refines derivatives to be *self-maintainable* (don't need to inspect the base input, only
-  the change) by threading cached intermediate results — necessary for derivatives to
-  actually be cheap, not just correct.
-- **Alvarez-Picallo, Ong — "Change Actions: Models of Generalised Differentiation"**.
-  Generalizes change structures to *change actions* over arbitrary cartesian categories;
-  connects to cartesian differential categories and (per Kelly, Pearlmutter, Siskind) to
-  automatic differentiation.
+  Makes derivatives *self-maintainable* (cheap to run without recomputing the base value).
+- **Alvarez-Picallo, Ong — "Change Actions: Models of Generalised Differentiation."**
+  Categorical generalization connecting to cartesian differential categories and automatic
+  differentiation.
+- **Pistone — "From Identity to Difference"** (arXiv:2107.06150). Explicit unification:
+  approximate equivalence, incremental computing, automatic differentiation, and
+  differential-privacy-style metric preservation are all the same derivative idea,
+  specialized differently (bounded vs. exact).
 
-### The unifying observation
+### Why not differential privacy (dropped from this plan)
 
-- **Pistone — "From Identity to Difference: A Quantitative Interpretation of the Identity
-  Type"** (arXiv:2107.06150). Builds "difference type theory" (dTT) explicitly to show that
-  approximate equivalence, metric preservation, incremental computing, automatic
-  differentiation, and differential privacy all share one structure: every program has a
-  derivative relating input-errors/changes to output-errors/changes; a *bounded* derivative
-  gives you a sensitivity/privacy guarantee, an *exact* derivative gives you incremental
-  computation. This is the clearest existing confirmation that the project's premise — one
-  language serving both DP and incremental computation — is not a stretch, it's the same
-  mathematical object specialized two ways.
+Considered and deprioritized. The DP tools actually running in production — Tumult
+Analytics (US Census Bureau, IRS, Wikimedia), Google's PipelineDP, IBM's diffprivlib,
+OpenDP — are Python libraries deliberately designed to mimic pandas/Spark APIs for
+non-experts. A usability study comparing these four found completion rates tracked with how
+familiar the API felt, and the tool least tied to a familiar API (OpenDP) had the worst
+completion rates. The Fuzz/DFuzz/Duet lineage of sensitivity-typed languages is fifteen
+years old with essentially no production adoption. The market has converged on "library
+with familiar API and expert-vetted primitives," which is close to the opposite of "new
+linear/graded type system" — so this is left out of the plan rather than forced into it.
 
 ## Design Direction
 
-**Core idea**: one linear/affine core calculus with graded function types `A —[g]→ B`,
-where `g` carries an actual DLR-style relational interpretation (a map from an input
-relation to an output relation) rather than a bare numeric bound. Two grade algebras are
-provided as instances:
+**Core idea**: a small typed intermediate representation (IR) with a formally-defined
+DLR-style relation, compositional over the IR's type structure, extended (via the
+effectful-program-distancing line of work) to handle I/O, exceptions, and mutation rather
+than restricting to a pure subset. This IR is the *specification* of what "distance between
+two program versions" precisely means — not something end users write directly.
 
-- `Sens` — a sensitivity quantale, indexed/dependent in the style of DFuzz so that bounds
-  can vary by input region (local sensitivity) instead of collapsing to one global
-  Lipschitz constant. This is the direct fix for the precision loss that the entire Fuzz
-  lineage documents at product/sum types.
-- `Δ` — a change-action algebra (Cai et al. / Alvarez-Picallo & Ong) giving real `⊕`/`⊖`
-  and a derivative, carrying the ILC correctness theorem: running the derivative and
-  patching equals rerunning on the patched input.
+**Frontend**: translate a real source language into the IR. Start with Python, since it's
+both the most common LLM-codegen target and what most of the cited SE literature already
+operates on. Mirror SymDiff's language-agnostic-IR-plus-frontends architecture so other
+languages can be added later without redesigning the core.
 
-Effects (notably DP noise mechanisms) are integrated via the effect/coeffect relational
-theory so that randomized mechanisms compose soundly with both grades.
+**Approximation engine**: exact DLR distances are uncomputable in general for Turing-complete
+code (this is inherent, not a design flaw), so the practical tool computes *sound
+over-approximations* — combining bounded symbolic execution (as in differential symbolic
+execution / SymDiff) with abstract interpretation (as in Partush & Yahav) — but reports a
+structured, region-conditioned, quantitative answer rather than collapsing to
+equivalent/not-equivalent/unknown. This quantitative reporting, grounded in the DLR
+relational structure, is the actual novel contribution relative to the existing regression-
+verification field.
 
-**The unique opportunity**: incrementally-maintained, privacy-budget-tracked streaming
-analytics — private materialized views that update cheaply as records stream in, where the
-privacy cost of each incremental update (not just a one-shot batch query) is type-tracked.
-This is a continual-observation differential privacy problem, and it is itself a
-coeffect-counting problem (how much budget has this stream consumed so far) — which is
-exactly what the graded/coeffect structure is for. Neither the Fuzz family nor the ILC
-family addresses this; it's the genuine differentiator.
+**Outputs / use cases**:
+1. Patch impact report: "identical except when input satisfies P; in that region, output
+   differs by at most ε" — for code-review risk-scoping.
+2. Regression test selection: cross-reference the non-zero-distance region against test
+   input coverage to flag tests that must rerun vs. tests provably unaffected.
+3. Codegen verification gate: given a reference implementation or spec and an LLM-generated
+   candidate, check the candidate's distance from the reference is within tolerance —
+   usable as a pre-commit check or as a tool an agentic coding system calls on itself before
+   proposing an edit.
+4. Bonus, when the engine derives an *exact* rather than merely bounded relation (the
+   program is amenable to symbolic differencing in the ILC sense): reuse that exact
+   derivative to incrementally re-run dataflow/pipeline-style code after a small edit,
+   instead of rerunning from scratch.
 
 ## Build Plan
 
-**v0 — typed EDSL, fastest path to something runnable.**
-Host in Haskell or OCaml (not a standalone compiler yet). Implement a small combinator
-library — `map`, `filter`, `groupBySum`, `join` — each shipped with both a sensitivity
-grade and a derivative, discharging two soundness obligations per combinator:
-1. Sensitivity theorem: typing implies `d(out, out') ≤ g · d(in, in')`.
-2. Derivative correctness: typing implies `f(a ⊕ δa) == f(a) ⊕ df(a, δa)`.
+**v0 — smallest useful tool.**
+1. Define the core IR and its DLR-style relational semantics (drawing directly on Dal Lago
+   et al.'s formal definitions, extended per "Effectful Program Distancing" for basic
+   effects).
+2. Python frontend for a tractable subset: pure-ish functions, standard control flow, common
+   stdlib/collections — expand coverage incrementally rather than aiming for all of Python
+   immediately.
+3. Approximation engine: bounded symbolic execution + an SMT solver (e.g. Z3) for the core
+   equivalence/bound checks, structured to report region-conditioned bounds rather than a
+   single boolean.
+4. CLI: `distancetool diff old.py new.py --func target_function` → structured impact report
+   (region-conditioned distance bound) + a recommended test subset, given an existing test
+   suite with known input coverage.
+5. Demo: run against a small real Python repo with an existing test suite; compare the
+   recommended test subset against naive line-diff-based test selection on a handful of
+   real historical commits.
 
-Add a Laplace-noise mechanism as the privacy-consuming primitive, composed through the
-grades so total epsilon budget is tracked across a pipeline.
+**v1 — codegen-guidance integration.**
+Wrap an LLM code-generation call so that `distancetool` checks the candidate against a
+reference implementation or spec before the candidate is accepted, demonstrating the
+constrained-generation use case end to end (pre-commit gate or agentic-tool-call form).
 
-**Demo target**: a streaming dashboard (e.g. daily-active-users over an event stream) that
-updates incrementally per event instead of recomputing from scratch, with a
-compile-time-checked privacy budget that accounts for repeated incremental updates.
-
-**v1 — standalone core calculus**, if v0 validates the approach. Bidirectional type
-checker, SMT-assisted constraint solving for the grade arithmetic (following μFuzz's
-approach of offloading nonlinear sensitivity constraints to a solver), since a host
-language's native type system won't cleanly carry the full grade algebra.
+**v2 — incremental-execution bonus**, only if v0/v1 validate: for programs where the engine
+derives an exact rather than bounded relation, wire that derivative into an actual
+incremental re-execution path (dataflow/pipeline-shaped code is the natural target), making
+the connection to the Cai et al. / ILC line concrete rather than purely theoretical.
 
 ## Open Questions / Design Risks
 
-- How much of DLR's full categorical generality is actually needed for the two target
-  grade algebras, versus how much can be a simpler graded-coeffect system in the Granule
-  lineage with DLR only informing the *soundness proofs*, not the surface type theory?
-- Local/data-dependent sensitivity (the `Sens` fix) likely needs some form of dependent or
-  index types (à la DFuzz) — how much dependent-type machinery is tolerable before it hurts
-  adoption?
-- Continual-observation DP composition theorems (how privacy budget degrades over repeated
-  incremental updates) are an active research area in their own right (cf. binary
-  mechanism / tree-based aggregation literature) — the type system needs to encode a
-  *correct* composition theorem, not an ad hoc one.
-- Self-maintainability (Cache-Transfer Style) adds real implementation complexity; decide
-  whether v0 needs it or can ship with plain (correct but not always cheap) derivatives
-  first.
+- Precision/scalability tradeoff: which static-analysis backbone (abstract interpretation
+  domain, symbolic execution depth/path limits, SMT solver scalability) determines how much
+  real-world Python the tool can handle before falling back to "unknown" — need to decide
+  acceptable fallback behavior early (e.g., degrade gracefully to a coarser bound rather
+  than refusing to answer).
+- How much of the IR's type structure should mirror Python's dynamic typing vs. impose a
+  simplified static view — too much simplification weakens the guarantees, too much fidelity
+  to dynamic typing may make the relational semantics intractable.
+- Effects (I/O, mutation, exceptions) are the hard part in practice, not the type-directed
+  distance structure itself — "Effectful Program Distancing" is the right theoretical
+  starting point, but turning it into a tractable static analysis for real Python is
+  genuine, unsolved engineering work.
+- How to validate the tool's outputs are actually more useful than the existing
+  regression-verification field's boolean/unknown answers — need a concrete benchmark
+  (e.g., real historical commits with known regressions) to demonstrate the quantitative,
+  region-conditioned answer changes a real decision (which tests to run, whether to approve
+  a patch) versus the boolean baseline.
 
 ## References (for follow-up reading)
 
 - Dal Lago, Gavazzo, Yoshimizu. Differential Logical Relations, Part I. ICALP 2019.
 - Dal Lago, Gavazzo. Differential Logical Relations, Part II. TCS 2021.
+- Dal Lago, Gavazzo. Effectful Program Distancing. POPL 2022.
 - Dal Lago, Hoshino, Pistone. On the Lattice of Program Metrics. FSCD 2023.
 - Dal Lago, Hoshino, Pistone. On the Metric Nature of (Differential) Logical Relations. FSCD 2025.
 - Crubillé, Dal Lago. Metric Reasoning About λ-Terms (affine: LICS 2015; general: ESOP 2017).
-- Dal Lago, Gavazzo. A Relational Theory of Effects and Coeffects. POPL 2022.
-- Reed, Pierce. Fuzz. ICFP 2010.
-- Gaboardi, Haeberlen, Hsu, Narayan, Pierce. DFuzz / Linear Dependent Types for Differential Privacy. POPL 2013.
-- Near et al. Duet. 2019.
-- Orchard, Liepelt, Eades III. Quantitative Program Reasoning with Graded Modal Types (Granule). ICFP 2019.
+- Jackson, Ladd. Semantic Diff: A Tool for Summarizing the Effects of Modifications. ICSM 1994.
+- Lahiri, Hawblitzel, Kawaguchi, Rebêlo. SymDiff. CAV 2012.
+- Person, Dwyer, Elbaum, Păsăreanu. Differential Symbolic Execution. FSE 2008.
+- Person, Yang, Rungta, Khurshid. Directed Incremental Symbolic Execution. PLDI 2011.
+- Partush, Yahav. Abstract Semantic Differencing for Numerical Programs. SAS 2013; via Speculative Correlation, PLDI 2014.
+- Godlin, Strichman. Regression Verification. DAC 2009.
+- "Evaluating LLM-Based Test Generation Under Software Evolution." arXiv:2603.23443, 2026.
+- "Enhancing LLM Code Generation with Ensembles: A Similarity-Based Selection Approach" (EnsLLM, CodeBLEU + CrossHair differential analysis). arXiv:2503.15838, 2025.
+- "Code Roulette: How Prompt Variability Affects LLM Code Generation" (TSED metric). arXiv:2506.10204, 2025.
 - Cai, Giarrusso, Rendel, Ostermann. A Theory of Changes for Higher-Order Languages. PLDI 2014.
 - Giarrusso et al. Incremental λ-Calculus in Cache-Transfer Style. ESOP 2019.
 - Alvarez-Picallo, Ong. Change Actions: Models of Generalised Differentiation.
