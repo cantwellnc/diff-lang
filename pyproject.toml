@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "distancetool"
+version = "0.1.0"
+description = "Semantic distance between program versions, grounded in Differential Logical Relations"
+requires-python = ">=3.10"
+dependencies = [
+    "z3-solver>=4.12",
+]
+
+[project.scripts]
+distancetool = "distancetool.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
