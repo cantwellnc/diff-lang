@@ -1,0 +1,6 @@
+Metadata-Version: 2.4
+Name: distancetool
+Version: 0.1.0
+Summary: Semantic distance between program versions, grounded in Differential Logical Relations
+Requires-Python: >=3.10
+Requires-Dist: z3-solver>=4.12

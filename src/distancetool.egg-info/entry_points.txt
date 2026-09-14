@@ -1,0 +1,2 @@
+[console_scripts]
+distancetool = distancetool.cli:main
